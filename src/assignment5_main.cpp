@@ -28,6 +28,7 @@ using geometry_msgs::Twist;
 using nav_msgs::Odometry;
 using std::cout;
 using std::vector;
+using std::max;
 
 
 // Publisher for velocity command.
@@ -50,6 +51,33 @@ Point32 ConvertVectorToPoint(const Vector3f& vector) {
   return point;
 }
 
+void testCheckPoint(Vector2f V, Vector2f P) {
+
+  bool is_obstacle = false;
+  float free_path_length = 0.0;
+  if (fabs(V.y()) > 0) {
+    const float R = V.x() / V.y();
+    Vector2f C(0, R);
+    if (fabs((P-C).norm() - fabs(R)) < 0.18f) {
+      is_obstacle = true;
+      float theta = (V.y() > 0) ? (atan2(P.x(), R - P.y())) : (atan2(P.x(), P.y() - R));
+      free_path_length = max(0.0f, float(theta * fabs(R) - 0.18f));
+    } else {
+      free_path_length = std::numeric_limits<float>::max();
+    }
+  } else {
+    if (fabs(P.y()) < 0.18f) {
+      is_obstacle = true;
+      free_path_length = max(0.0f, P.x() - 0.18f);
+    } else {
+      free_path_length = std::numeric_limits<float>::max();
+    }
+  }
+  cout << free_path_length;
+  cout << "\n";
+  cout << is_obstacle;
+}
+
 bool CheckPointService(
     compsci403_assignment5::CheckPointSrv::Request& req,
     compsci403_assignment5::CheckPointSrv::Response& res) {
@@ -61,13 +89,13 @@ bool CheckPointService(
   float free_path_length = 0.0;
 
   // Write code to compute is_obstacle and free_path_length.
-  if (fabs(V.z()) > 0) {
-    const float R = v / w;
+  if (fabs(V.y()) > 0) {
+    const float R = V.x() / V.y();
     Vector2f C(0, R);
-    if (fabs((P-C).norm() - R) < 0.18f) {
+    if (fabs((P-C).norm() - fabs(R)) < 0.18f) {
       is_obstacle = true;
-      float theta = (w > 0) ? (atan2(P.x(), R - P.y())) : (atan2(P.x(), P.y() - R));
-      free_path_length = max(0.0f, theta * fabs(R) - 0.18f)
+      float theta = (V.y() > 0) ? (atan2(P.x(), R - P.y())) : (atan2(P.x(), P.y() - R));
+      free_path_length = max(0.0f, float(theta * fabs(R) - 0.18f));
     } else {
       free_path_length = std::numeric_limits<float>::max();
     }
@@ -246,6 +274,7 @@ int main(int argc, char **argv) {
       n.subscribe("/odom", 1, OdometryCallback);
 
   ros::spin();
+
 
   return 0;
 }

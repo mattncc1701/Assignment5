@@ -61,20 +61,25 @@ bool CheckPointService(
   float free_path_length = 0.0;
 
   // Write code to compute is_obstacle and free_path_length.
-  float R = V.x()/V.y();
-  const Vector2f p_prime(P.x(), P.y() - R);
-  float mag_p_prime = sqrt(pow(p_prime.x(), 2) + pow(p_prime.y(), 2));
-  float r = 1.8; 
-
-  // Point is an obstacle, compute free_path_length
-  if ((R-r) < mag_p_prime < (R+r)) {
-    is_obstacle = true;
-    float theta = atan2(p_prime.y(), p_prime.x());
-    float D = R * theta;
-    float d = mag_p_prime - R;
-    float epislon = sqrt(pow(r, 2) - pow(d, 2));
-    free_path_length = D - epislon;
+  if (fabs(V.z()) > 0) {
+    const float R = v / w;
+    Vector2f C(0, R);
+    if (fabs((P-C).norm() - R) < 0.18f) {
+      is_obstacle = true;
+      float theta = (w > 0) ? (atan2(P.x(), R - P.y())) : (atan2(P.x(), P.y() - R));
+      free_path_length = max(0.0f, theta * fabs(R) - 0.18f)
+    } else {
+      free_path_length = std::numeric_limits<float>::max();
+    }
+  } else {
+    if (fabs(P.y()) < 0.18f) {
+      is_obstacle = true;
+      free_path_length = max(0.0f, P.x() - 0.18f);
+    } else {
+      free_path_length = std::numeric_limits<float>::max();
+    }
   }
+
   res.free_path_length = free_path_length;
   res.is_obstacle = is_obstacle;
   return true;

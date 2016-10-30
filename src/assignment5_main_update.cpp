@@ -29,7 +29,7 @@ using nav_msgs::Odometry;
 using std::cout;
 using std::vector;
 using std::max;
-
+using std::min;
 
 // Publisher for velocity command.
 ros::Publisher velocity_command_publisher_;
@@ -38,6 +38,23 @@ ros::Publisher laserscan_cloud_publisher_;
 
 // Last received odometry message.
 Odometry last_odometry;
+
+// INTRINSICS
+const float px = 320;
+const float py = 240;
+const float fx = 588.446;
+const float fy = -564.227;
+const float a = 3.008;
+const float b = -0.002745;
+
+// ROBOT LIMITS
+const float MAX_V = 0.5;
+const float MAX_ROT = 1.5;
+
+const float MAX_V_acc = 0.5;
+const float MAX_ROT_acc = 2;
+
+const float TIME_STEP = 0.05;
 
 // Helper function to convert ROS Point32 to Eigen Vectors.
 Vector3f ConvertPointToVector(const geometry_msgs::Point32& point) {
@@ -229,6 +246,23 @@ bool PointCloudToLaserScanService(
   return true;
 }
 
+float velocity(float v,float w){
+  return sqrt(pow(v,2) + pow(w,2));
+}
+
+// NOT SURE
+float dist(float v, float w){
+
+  // float theta = (V.y() > 0) ? (atan2(P.x(), R - P.y())) : (atan2(P.x(), P.y() - R));
+  // free_path_length = max(0.0f, float(theta * fabs(R) - 0.18f));
+
+  return 0;
+}
+
+float angle(float v, float w){
+  return 0;
+}
+
 bool GetCommandVelService(
     compsci403_assignment5::GetCommandVelSrv::Request& req,
     compsci403_assignment5::GetCommandVelSrv::Response& res) {
@@ -255,21 +289,91 @@ bool GetCommandVelService(
       // Reconstruct 3D point from x, y, raw_depth using the camera intrinsics and add it to your point cloud.
       Vector3f point;
 
+      float depth =  1.0 / (a + (b*raw_depth));
+      float Z =  depth;
+      float X = ((x - px)*1.0 / fx ) * Z;
+      float Y = ((y - py)*1.0 / fy ) * Z;
+
+      point = Vector3f(X,Y,Z);
+
       point_cloud.push_back(point);
     }
   }
 
   // Use your code from part 3 to convert the point cloud to a laser scan
+  vector<float> ranges;
+  PointCloudToLaserScanUtility(point_cloud, ranges);
 
   // Implement dynamic windowing approach to find the best velocity command for next time step
+  float V_min = max(float(0.0), V.x() - (MAX_V_acc * TIME_STEP));
+  float V_max = min(MAX_V, V.x() + (MAX_V_acc * TIME_STEP));
+  
+  // Rotation: Min(Smallest Rotation Velocity, W - (W_a * Timestep))
+  float W_min = max(-MAX_ROT, V.y() - (MAX_ROT_acc * TIME_STEP));
+  float W_max = min(MAX_ROT, V.y() + (MAX_ROT_acc * TIME_STEP));
+
+  int V_WINDOW_SIZE = 20;
+  int W_WINDOW_SIZE = 20;
+
+  float V_increment = (V_max-V_min)/V_WINDOW_SIZE;
+  float W_increment = (W_max-V_min)/W_WINDOW_SIZE;
+
+  // COST PARAMETERS
+  float alpha = 1.0;
+  float beta = 1.0;
+  float gamma = 1.0;
+
+  // BEST V,W
+  Vector2f bestVW = Vector2f(0,0);
+  float bestCost = std::numeric_limits<float>::max();
+
+  float v = V_min;
+  for(int i = 0; i < V_WINDOW_SIZE; i++){
+    float w = W_min;
+    for(int j = 0; j < W_WINDOW_SIZE; j++){
+      // ITERATE THROUGH ALL V,W PAIRS.
+
+      // Radius of Curvature.
+      float radius_of_curvature = v/w;
+      // Center of curvature.
+      Vector2f center_of_curvature = Vector2f(0, radius_of_curvature);
+
+      // FOR EACH OBSTACLE.
+      bool admissable = false;
+      for(size_t k = 0; k < ranges.size(); k++){
+        // Check within radius of path ?!?!?!?
+
+        // Check for Stopping Distance
+
+        // If stopping distance is insufficient mark as !admissable.
+      }
+
+      if(admissable){
+        continue;
+      }
+
+      // Calculate Cost
+      float currCost = alpha*angle(v,w) + beta*dist(v,w) + gamma*velocity(v,w);
+
+      // Update
+      if(currCost < bestCost){
+        bestCost = currCost;
+        bestVW = Vector2f(v,w);
+      }
+
+
+      w += W_increment;
+    }
+    v += V_increment;
+  }
 
   // Return the best velocity command
   // Cv is of type Point32 and its x component is the linear velocity towards forward direction
   // you do not need to fill its other components
-  res.Cv.x = 0;
+  res.Cv.x = bestVW.x();
   // Cw is of type Point32 and its z component is the rotational velocity around z axis
   // you do not need to fill its other components
-  res.Cw.z = 0;
+  res.Cw.z = bestVW.y();
 
   return true;
 }

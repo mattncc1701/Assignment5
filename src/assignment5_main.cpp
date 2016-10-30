@@ -51,33 +51,6 @@ Point32 ConvertVectorToPoint(const Vector3f& vector) {
   return point;
 }
 
-void testCheckPoint(Vector2f V, Vector2f P) {
-
-  bool is_obstacle = false;
-  float free_path_length = 0.0;
-  if (fabs(V.y()) > 0) {
-    const float R = V.x() / V.y();
-    Vector2f C(0, R);
-    if (fabs((P-C).norm() - fabs(R)) < 0.18f) {
-      is_obstacle = true;
-      float theta = (V.y() > 0) ? (atan2(P.x(), R - P.y())) : (atan2(P.x(), P.y() - R));
-      free_path_length = max(0.0f, float(theta * fabs(R) - 0.18f));
-    } else {
-      free_path_length = std::numeric_limits<float>::max();
-    }
-  } else {
-    if (fabs(P.y()) < 0.18f) {
-      is_obstacle = true;
-      free_path_length = max(0.0f, P.x() - 0.18f);
-    } else {
-      free_path_length = std::numeric_limits<float>::max();
-    }
-  }
-  cout << free_path_length;
-  cout << "\n";
-  cout << is_obstacle;
-}
-
 bool CheckPointService(
     compsci403_assignment5::CheckPointSrv::Request& req,
     compsci403_assignment5::CheckPointSrv::Response& res) {
@@ -113,6 +86,41 @@ bool CheckPointService(
   return true;
 }
 
+bool ObstaclePointCloudUtility(float R_req[], geometry_msgs::Point32 T_req, vector<Vector3f> point_cloud, vector<Vector3f>& obstacle_point_cloud) {
+
+  // ROTATION
+  Matrix3f R;
+  for (int row = 0; row < 3; ++row) {
+    for (int col = 0; col < 3; ++col) {
+      R(row, col) = R_req[col * 3 + row];
+    }
+  }
+
+  // TRANSLATION
+  const Vector3f T(T_req.x, T_req.y, T_req.z);
+
+  // Write code here to transform the input point cloud from the Kinect reference frame to the
+  // robot's reference frame. Then filter out the points corresponding to ground
+  // or heights larger than the height of the robot
+  for (size_t i = 0; i < point_cloud.size(); ++i) {
+    Vector3f currPoint = point_cloud[i];
+
+    // Perform Rotation, Followed by Translation.
+    currPoint = currPoint.transpose() * R;
+    currPoint = currPoint + T;
+
+    // Check Min and Max z.
+    if (currPoint.z() <= 0.0375 || currPoint.z() > .36) {
+      continue;
+    }
+
+    // Insert Valid Filtered Point.
+    (obstacle_point_cloud).insert((obstacle_point_cloud).end(), currPoint);
+  }
+
+  return true;
+}
+
 bool ObstaclePointCloudService(
     compsci403_assignment5::ObstaclePointCloudSrv::Request& req,
     compsci403_assignment5::ObstaclePointCloudSrv::Response& res) {
@@ -123,28 +131,49 @@ bool ObstaclePointCloudService(
     }
   }
   const Vector3f T(req.T.x, req.T.y, req.T.z);
-
   // Copy over all the points.
   vector<Vector3f> point_cloud(req.P.size());
   for (size_t i = 0; i < point_cloud.size(); ++i) {
     point_cloud[i] = ConvertPointToVector(req.P[i]);
   }
-
   vector<Vector3f> filtered_point_cloud;
   // Write code here to transform the input point cloud from the Kinect reference frame to the
   // robot's reference frame. Then filter out the points corresponding to ground
   // or heights larger than the height of the robot
-  for (size_t i = 0; i < point_cloud.size(); ++i) {
-    if (point_cloud[i].z() <= 0 || point_cloud[i].z() > .36) {
-      continue;
-    }
-    filtered_point_cloud.insert(filtered_point_cloud.end(), (point_cloud[i].transpose() * R).transpose() + T);
-  }
+  ObstaclePointCloudUtility(R, req.T, point_cloud, filtered_point_cloud);
 
   res.P_prime.resize(filtered_point_cloud.size());
   for (size_t i = 0; i < filtered_point_cloud.size(); ++i) {
     res.P_prime[i] = ConvertVectorToPoint(filtered_point_cloud[i]);
   }
+  return true;
+}
+
+bool PointCloudToLaserScanUtility(vector<Vector3f> point_cloud, vector<float>& ranges){
+  // Set all of the ranges to be inifintely far away
+  for (int i = 0; i < 56; ++i) {
+    ranges.insert(ranges.begin(), std::numeric_limits<float>::max());
+  }
+
+  for (size_t i = 0; i < point_cloud.size(); ++i) {
+    Vector3f temp = point_cloud[i];
+    // Project point to the ground plan
+    temp.z() = 0;
+    // Calculate the points angle in relation to the bot
+    float theta = atan2(temp.y(), temp.x());
+    // .488692 == 28 degress in radians. Removes outliers
+    if (theta > .488692 || theta < -.488692) {
+      continue;
+    }
+    // Calculate the points distance from the robot
+    float distance = sqrt(pow(temp.x(),2) + pow(temp.y(),2));
+    int index = int(theta*360/(2*M_PI)) + 28;
+    // If the point is closer than the point currently in that angles position update it
+    if (distance < ranges[index]) {
+      ranges[index] = distance;
+    } 
+  }
+
   return true;
 }
 
@@ -161,28 +190,7 @@ bool PointCloudToLaserScanService(
   vector<float> ranges;
   // Process the point cloud here and convert it to a laser scan
   // Set all of the ranges to be inifintely far away
-  for (int i = 0; i < 56; ++i) {
-    ranges.insert(ranges.begin(), std::numeric_limits<float>::max());
-  }
-
-  for (size_t i = 0; i < point_cloud.size(); ++i) {
-    Vector3f temp = point_cloud[i];
-    // Project point to the ground plan
-    temp.z() = 0;
-    // Calculate the points angle in relation to the bot
-    int theta = int(atan2(temp.y(), temp.x()));
-    // .488692 == 28 degress in radians. Removes outliers
-    if (theta > .488692 || theta < -.488692) {
-      continue;
-    }
-    // Calculate the points distance from the robot
-    float distance = sqrt(pow(temp.x(),2) + pow(temp.y(),2));
-    int index = int(theta*360/(2*M_PI)) + 28;
-    // If the point is closer than the point currently in that angles position update it
-    if (distance < ranges[index]) {
-      ranges[index] = distance;
-    } 
-  }
+  PointCloudToLaserScanUtility(point_cloud, ranges);
 
   res.ranges = ranges;
   return true;

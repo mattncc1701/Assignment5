@@ -142,7 +142,7 @@ bool ObstaclePointCloudUtility(float R_req[], geometry_msgs::Point32 T_req, vect
     currPoint = currPoint + T;
 
     // Check Min and Max z.
-    if (currPoint.z() <= 0 || currPoint.z() > .36) {
+    if (currPoint.z() <= 0.0375 || currPoint.z() > .36) {
       continue;
     }
 
@@ -182,7 +182,7 @@ bool ObstaclePointCloudService(
   return true;
 }
 
-bool PointCloudToLaserScanUtility(vector<Vector3f> point_cloud, vector<float>& ranges, vector<Vector3f>& point_cloud = NULL){
+bool PointCloudToLaserScanUtility(vector<Vector3f> point_cloud, vector<float>& ranges){
   // Set all of the ranges to be inifintely far away
   for (int i = 0; i < 56; ++i) {
     ranges.insert(ranges.begin(), std::numeric_limits<float>::max());
@@ -193,7 +193,7 @@ bool PointCloudToLaserScanUtility(vector<Vector3f> point_cloud, vector<float>& r
     // Project point to the ground plan
     temp.z() = 0;
     // Calculate the points angle in relation to the bot
-    int theta = int(atan2(temp.y(), temp.x()));
+    float theta = atan2(temp.y(), temp.x());
     // .488692 == 28 degress in radians. Removes outliers
     if (theta > .488692 || theta < -.488692) {
       continue;
@@ -211,7 +211,6 @@ bool PointCloudToLaserScanUtility(vector<Vector3f> point_cloud, vector<float>& r
   return true;
 }
 
-
 bool PointCloudToLaserScanService(
     compsci403_assignment5::PointCloudToLaserScanSrv::Request& req,
     compsci403_assignment5::PointCloudToLaserScanSrv::Response& res) {
@@ -225,6 +224,7 @@ bool PointCloudToLaserScanService(
   vector<float> ranges;
   // Process the point cloud here and convert it to a laser scan
   PointCloudToLaserScanUtility(point_cloud, ranges);
+  
   res.ranges = ranges;
   return true;
 }
@@ -331,7 +331,7 @@ void LaserScanCallback(const sensor_msgs::PointCloud& point_cloud) {
 
   // Preset Values.
   vector<Vector3f> points(point_cloud.points.size()); // GIVEN POINT CLOUD
-  vector<float> laser_scan;  // LASER SCAN
+  vector<float> ranges;  // Ranges for laser scan
 
   // Generating a point cloud (optional argument)
   vector<Vector3f> filtered_point_cloud;  // LASER POINT CLOUD
@@ -343,16 +343,18 @@ void LaserScanCallback(const sensor_msgs::PointCloud& point_cloud) {
     points[i] = ConvertPointToVector(point_cloud.points[i]);
   }
 
-  PointCloudToLaserScanUtility(points,laser_scan);
+  PointCloudToLaserScanUtility(points, ranges);
 
-  // Insert all filtered_point_cloud. 
-  for (size_t i = 0; i < filtered_point_cloud.size(); ++i) {
-    point_cloud_result.points.insert(point_cloud_result.points.end(), ConvertVectorToPoint(filtered_point_cloud[i]));
-  }
+  sensor_msgs::LaserScan laser_scan = sensor_msgs::LaserScan();
+  laser_scan.header = point_cloud.header;
+  laser_scan.ranges = ranges;
+  laser_scan.angle_increment = float(float((1.0/360.0))*2.0*M_PI); // One degree
+  laser_scan.angle_max = float(float((28.0/360.0))*2.0*M_PI); // 28 degrees
+  laser_scan.angle_min = float(float((-28.0/360.0))*2.0*M_PI); // -28 degrees
+  laser_scan.range_min = 0.8; //.8 meters
+  laser_scan.range_max = 4; //4 meters
 
-
-  // NOT SURE WHAT TO PUBLISH HERE
-  // laserscan_cloud_publisher_.publish(point_cloud_result);
+  laserscan_cloud_publisher_.publish(laser_scan);
 }
 
 
@@ -377,9 +379,8 @@ int main(int argc, char **argv) {
       n.advertise<sensor_msgs::PointCloud>("/COMPSCI403/ObstaclePointCloud", 1);
 
   // PART 3: TEST PUBLISHER FOR LASER SCAN 
-  obstacle_point_cloud_publisher_ =
-      n.advertise<sensor_msgs::PointCloud>("/COMPSCI403/LaserScan", 1);
-
+  laserscan_cloud_publisher_ =
+      n.advertise<sensor_msgs::LaserScan>("/COMPSCI403/LaserScan", 1);
 
   ros::Subscriber depth_image_subscriber =
       n.subscribe("/Cobot/Kinect/Depth", 1, DepthImageCallback);

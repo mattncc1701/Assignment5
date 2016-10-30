@@ -34,6 +34,7 @@ using std::max;
 // Publisher for velocity command.
 ros::Publisher velocity_command_publisher_;
 ros::Publisher obstacle_point_cloud_publisher_;
+ros::Publisher laserscan_cloud_publisher_;
 
 // Last received odometry message.
 Odometry last_odometry;
@@ -181,19 +182,7 @@ bool ObstaclePointCloudService(
   return true;
 }
 
-
-bool PointCloudToLaserScanService(
-    compsci403_assignment5::PointCloudToLaserScanSrv::Request& req,
-    compsci403_assignment5::PointCloudToLaserScanSrv::Response& res) {
-
-  // Copy over all the points.
-  vector<Vector3f> point_cloud(req.P.size());
-  for (size_t i = 0; i < point_cloud.size(); ++i) {
-    point_cloud[i] = ConvertPointToVector(req.P[i]);
-  }
-
-  vector<float> ranges;
-  // Process the point cloud here and convert it to a laser scan
+bool PointCloudToLaserScanUtility(vector<Vector3f> point_cloud, vector<float>& ranges, vector<Vector3f>& point_cloud = NULL){
   // Set all of the ranges to be inifintely far away
   for (int i = 0; i < 56; ++i) {
     ranges.insert(ranges.begin(), std::numeric_limits<float>::max());
@@ -218,6 +207,24 @@ bool PointCloudToLaserScanService(
     } 
   }
 
+
+  return true;
+}
+
+
+bool PointCloudToLaserScanService(
+    compsci403_assignment5::PointCloudToLaserScanSrv::Request& req,
+    compsci403_assignment5::PointCloudToLaserScanSrv::Response& res) {
+
+  // Copy over all the points.
+  vector<Vector3f> point_cloud(req.P.size());
+  for (size_t i = 0; i < point_cloud.size(); ++i) {
+    point_cloud[i] = ConvertPointToVector(req.P[i]);
+  }
+
+  vector<float> ranges;
+  // Process the point cloud here and convert it to a laser scan
+  PointCloudToLaserScanUtility(point_cloud, ranges);
   res.ranges = ranges;
   return true;
 }
@@ -319,6 +326,35 @@ void FilteredPointCloudCallback(const sensor_msgs::PointCloud& point_cloud) {
   obstacle_point_cloud_publisher_.publish(point_cloud_result);
 }
 
+// Part 3: Test
+void LaserScanCallback(const sensor_msgs::PointCloud& point_cloud) {
+
+  // Preset Values.
+  vector<Vector3f> points(point_cloud.points.size()); // GIVEN POINT CLOUD
+  vector<float> laser_scan;  // LASER SCAN
+
+  // Generating a point cloud (optional argument)
+  vector<Vector3f> filtered_point_cloud;  // LASER POINT CLOUD
+  sensor_msgs::PointCloud point_cloud_result = sensor_msgs::PointCloud();
+  vector<geometry_msgs::Point32> vals;  // Vector3f -> Point32 vector.
+
+  // Create vector of Vector3f from given cloud.
+  for (size_t i = 0; i < points.size(); ++i) {
+    points[i] = ConvertPointToVector(point_cloud.points[i]);
+  }
+
+  PointCloudToLaserScanUtility(points,laser_scan);
+
+  // Insert all filtered_point_cloud. 
+  for (size_t i = 0; i < filtered_point_cloud.size(); ++i) {
+    point_cloud_result.points.insert(point_cloud_result.points.end(), ConvertVectorToPoint(filtered_point_cloud[i]));
+  }
+
+
+  // NOT SURE WHAT TO PUBLISH HERE
+  // laserscan_cloud_publisher_.publish(point_cloud_result);
+}
+
 
 int main(int argc, char **argv) {
   ros::init(argc, argv, "compsci403_assignment5");
@@ -340,6 +376,11 @@ int main(int argc, char **argv) {
   obstacle_point_cloud_publisher_ =
       n.advertise<sensor_msgs::PointCloud>("/COMPSCI403/ObstaclePointCloud", 1);
 
+  // PART 3: TEST PUBLISHER FOR LASER SCAN 
+  obstacle_point_cloud_publisher_ =
+      n.advertise<sensor_msgs::PointCloud>("/COMPSCI403/LaserScan", 1);
+
+
   ros::Subscriber depth_image_subscriber =
       n.subscribe("/Cobot/Kinect/Depth", 1, DepthImageCallback);
   ros::Subscriber odometry_subscriber =
@@ -348,6 +389,10 @@ int main(int argc, char **argv) {
   // PART 2: Subscribed to FilteredPointCloud
   ros::Subscriber filtered_point_cloud_subscriber =
       n.subscribe("/Cobot/Kinect/FilteredPointCloud", 1, FilteredPointCloudCallback);
+  // PART 3: Subscribed to FilteredPointCloud. doing stuff with lasers.
+  ros::Subscriber laserscan_cloud_subscriber =
+      n.subscribe("/Cobot/Kinect/FilteredPointCloud", 1, LaserScanCallback);
+
   ros::spin();
 
 

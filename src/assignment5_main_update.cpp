@@ -246,6 +246,9 @@ bool PointCloudToLaserScanService(
   return true;
 }
 
+/*
+  CHECK THESE 3 FUNCTIONS?
+*/
 float velocity(float v,float w){
   return sqrt(pow(v,2) + pow(w,2));
 }
@@ -260,7 +263,14 @@ float dist(float v, float w){
 }
 
 float angle(float v, float w){
-  return 0;
+  // Goal Heading
+  float v_goal = 1.0;
+  float w_goal = 0.0;
+  float dot = v*v_goal + w*w_goal;        // dot product
+  float det = v*w_goal - w*v_goal;       //determinant
+  float angle = atan2(det, dot);        // atan2(y, x) or atan2(sin, cos)
+
+  return angle;
 }
 
 bool GetCommandVelService(
@@ -318,10 +328,10 @@ bool GetCommandVelService(
   float V_increment = (V_max-V_min)/V_WINDOW_SIZE;
   float W_increment = (W_max-V_min)/W_WINDOW_SIZE;
 
-  // COST PARAMETERS
-  float alpha = 1.0;
-  float beta = 1.0;
-  float gamma = 1.0;
+  // COST PARAMETERS (FROM PDF ON DYNAMIC WINDOWS).
+  float alpha = 0.2;
+  float beta = 2.0;
+  float gamma = 0.2;
 
   // BEST V,W
   Vector2f bestVW = Vector2f(0,0);
@@ -339,16 +349,25 @@ bool GetCommandVelService(
       Vector2f center_of_curvature = Vector2f(0, radius_of_curvature);
 
       // FOR EACH OBSTACLE.
-      bool admissable = false;
+      bool skip_point = false;
       for(size_t k = 0; k < ranges.size(); k++){
+        /*
+          ****************** WHERE IM NOT SURE *******************
+        */
         // Check within radius of path ?!?!?!?
-
-        // Check for Stopping Distance
-
-        // If stopping distance is insufficient mark as !admissable.
+        bool within_radius_of_path = true; // TODO
+        if(within_radius_of_path){
+        
+          // Check for Stopping Distance ?!?!?!?!
+          float stopping_distance = pow(v,2)/(2*MAX_V_acc);// v^2/(2* max_v_accel)
+          // I STRONGLY DONT THINK THIS IS CORRECT...but it could be
+          if(stopping_distance > ranges[k]){
+            skip_point = true;
+          }
+        }
       }
 
-      if(admissable){
+      if(skip_point){
         continue;
       }
 

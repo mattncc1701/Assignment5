@@ -39,6 +39,10 @@ ros::Publisher laserscan_cloud_publisher_;
 // Last received odometry message.
 Odometry last_odometry;
 
+// Last receieved transformation parameters
+float R_transform[9];
+Point32 T_transform;
+
 // INTRINSICS
 const float px = 320;
 const float py = 240;
@@ -71,10 +75,8 @@ geometry_msgs::Point32 ConvertVectorToPoint(const Vector3f& vector) {
   return point;
 }
 
-void testCheckPoint(Vector2f V, Vector2f P) {
-
-  bool is_obstacle = false;
-  float free_path_length = 0.0;
+// PART 1 Helper Function
+void CheckPointUtility(Vector2f V, Vector2f P, float& free_path_length, bool& is_obstacle) {
   if (fabs(V.y()) > 0) {
     const float R = V.x() / V.y();
     Vector2f C(0, R);
@@ -93,9 +95,6 @@ void testCheckPoint(Vector2f V, Vector2f P) {
       free_path_length = std::numeric_limits<float>::max();
     }
   }
-  cout << free_path_length;
-  cout << "\n";
-  cout << is_obstacle;
 }
 
 bool CheckPointService(
@@ -109,24 +108,7 @@ bool CheckPointService(
   float free_path_length = 0.0;
 
   // Write code to compute is_obstacle and free_path_length.
-  if (fabs(V.y()) > 0) {
-    const float R = V.x() / V.y();
-    Vector2f C(0, R);
-    if (fabs((P-C).norm() - fabs(R)) < 0.18f) {
-      is_obstacle = true;
-      float theta = (V.y() > 0) ? (atan2(P.x(), R - P.y())) : (atan2(P.x(), P.y() - R));
-      free_path_length = max(0.0f, float(theta * fabs(R) - 0.18f));
-    } else {
-      free_path_length = std::numeric_limits<float>::max();
-    }
-  } else {
-    if (fabs(P.y()) < 0.18f) {
-      is_obstacle = true;
-      free_path_length = max(0.0f, P.x() - 0.18f);
-    } else {
-      free_path_length = std::numeric_limits<float>::max();
-    }
-  }
+  CheckPointUtility(V, P, free_path_length, is_obstacle);
 
   res.free_path_length = free_path_length;
   res.is_obstacle = is_obstacle;
@@ -199,7 +181,7 @@ bool ObstaclePointCloudService(
   return true;
 }
 
-bool PointCloudToLaserScanUtility(vector<Vector3f> point_cloud, vector<float>& ranges){
+sensor_msgs::LaserScan PointCloudToLaserScanUtility(vector<Vector3f> point_cloud, vector<float>& ranges){
   // Set all of the ranges to be inifintely far away
   for (int i = 0; i < 56; ++i) {
     ranges.insert(ranges.begin(), std::numeric_limits<float>::max());
@@ -223,9 +205,15 @@ bool PointCloudToLaserScanUtility(vector<Vector3f> point_cloud, vector<float>& r
       ranges[index] = distance;
     } 
   }
+  sensor_msgs::LaserScan laser_scan = sensor_msgs::LaserScan();
+  laser_scan.ranges = ranges;
+  laser_scan.angle_increment = float(float((1.0/360.0))*2.0*M_PI); // One degree
+  laser_scan.angle_max = float(float((28.0/360.0))*2.0*M_PI); // 28 degrees
+  laser_scan.angle_min = float(float((-28.0/360.0))*2.0*M_PI); // -28 degrees
+  laser_scan.range_min = 0.8; //.8 meters, min distance
+  laser_scan.range_max = 4; //4 meters, max distance
 
-
-  return true;
+  return laser_scan;
 }
 
 bool PointCloudToLaserScanService(
@@ -246,51 +234,55 @@ bool PointCloudToLaserScanService(
   return true;
 }
 
-/*
-  CHECK THESE 3 FUNCTIONS?
-*/
 float velocity(float v,float w){
   return sqrt(pow(v,2) + pow(w,2));
 }
 
-// NOT SURE
 float dist(float v, float w){
 
-  // float theta = (V.y() > 0) ? (atan2(P.x(), R - P.y())) : (atan2(P.x(), P.y() - R));
-  // free_path_length = max(0.0f, float(theta * fabs(R) - 0.18f));
+  //float theta = (V.y() > 0) ? (atan2(P.x(), R - P.y())) : (atan2(P.x(), P.y() - R));
+  //free_path_length = max(0.0f, float(theta * fabs(R) - 0.18f));
 
   return 0;
 }
 
 float angle(float v, float w){
   // Goal Heading
-  float v_goal = 1.0;
-  float w_goal = 0.0;
-  float dot = v*v_goal + w*w_goal;        // dot product
-  float det = v*w_goal - w*v_goal;       //determinant
-  float angle = atan2(det, dot);        // atan2(y, x) or atan2(sin, cos)
+  //float v_goal = 1.0;
+  //float w_goal = 0.0;
+  //float dot = v*v_goal + w*w_goal;        // dot product
+  //float det = v*w_goal - w*v_goal;       //determinant
+  //float angle = atan2(det, dot);        // atan2(y, x) or atan2(sin, cos)
 
-  return angle;
+  /* 
+   * NOTE Come to think of it I believe the angle is just like
+   * how we did it in assignment 4 where theta = atan2(V.y, V.x)
+   * I could be wrong but I believe we should just be passing back
+   * atan2(w, v) since that would be angle of the velocity vector
+   * compared with the vector going straight forward. To be honest your
+   * code may do the same thing but it is too late at night for me to be thinking of this.
+   */ 
+  return atan2(w, v);
 }
 
-bool GetCommandVelService(
-    compsci403_assignment5::GetCommandVelSrv::Request& req,
-    compsci403_assignment5::GetCommandVelSrv::Response& res) {
-
+bool GetCommandVelUtility(Vector2f V, sensor_msgs::Image Image, const bool is_part5, Vector2f& new_velocity) {
   vector<Vector3f> point_cloud;
   // The input v0 and w0 are each vectors. The x component of v0 is the linear 
   // velocity towards forward direction and the z component of w0 is the
   // rotational velocity around the z axis, i.e. around the center of rotation
   // of the robot and in counter-clockwise direction
-  const Vector2f V(req.v0.x, req.w0.z);
 
-  for (unsigned int y = 0; y < req.Image.height; ++y) {
-    for (unsigned int x = 0; x < req.Image.width; ++x) {
+  for (unsigned int y = 0; y < Image.height; ++y) {
+    for (unsigned int x = 0; x < Image.width; ++x) {
       // Add code here to only process only every nth pixel
+      // NOTE THIS COULD BE INCORRECT
+      if (((x+y) % 10) != 0) { // assuming n = 10 like it says in part 4
+        continue;
+      }      
 
-      uint16_t byte0 = req.Image.data[2 * (x + y * req.Image.width) + 0];
-      uint16_t byte1 = req.Image.data[2 * (x + y * req.Image.width) + 1];
-      if (!req.Image.is_bigendian) {
+      uint16_t byte0 = Image.data[2 * (x + y * Image.width) + 0];
+      uint16_t byte1 = Image.data[2 * (x + y * Image.width) + 1];
+      if (!Image.is_bigendian) {
         std::swap(byte0, byte1);
       }
       // Combine the two bytes to form a 16 bit value, and disregard the
@@ -309,10 +301,19 @@ bool GetCommandVelService(
       point_cloud.push_back(point);
     }
   }
+  vector<Vector3f> obstacle_point_cloud;
+  // Part 5 requires us to transform the pointcloud to the robots reference frame
+  if (is_part5) {
+    ObstaclePointCloudUtility(R_transform, T_transform, point_cloud, obstacle_point_cloud);
+  } else {
+    obstacle_point_cloud = point_cloud;
+  }
 
+  
   // Use your code from part 3 to convert the point cloud to a laser scan
   vector<float> ranges;
-  PointCloudToLaserScanUtility(point_cloud, ranges);
+  // I changed the utility function to return a LaserScan object to make our lives easier
+  sensor_msgs::LaserScan laser_scan = PointCloudToLaserScanUtility(obstacle_point_cloud, ranges);
 
   // Implement dynamic windowing approach to find the best velocity command for next time step
   float V_min = max(float(0.0), V.x() - (MAX_V_acc * TIME_STEP));
@@ -338,43 +339,55 @@ bool GetCommandVelService(
   float bestCost = std::numeric_limits<float>::max();
 
   float v = V_min;
+  // ITERATE THROUGH ALL V,W PAIRS.
   for(int i = 0; i < V_WINDOW_SIZE; i++){
     float w = W_min;
     for(int j = 0; j < W_WINDOW_SIZE; j++){
-      // ITERATE THROUGH ALL V,W PAIRS.
+      // In the lecture slides it says you need the radius of curvature and the center
+      // But that is done in the CheckPointUtility, which is why you need them in the first 
+      // place and you don't need them anywhere else.
 
-      // Radius of Curvature.
-      float radius_of_curvature = v/w;
-      // Center of curvature.
-      Vector2f center_of_curvature = Vector2f(0, radius_of_curvature);
-
-      // FOR EACH OBSTACLE.
-      bool skip_point = false;
+      // Go through the laser scan (our obstacles) and see if any make the current V,W pair
+      // inadmissible (i.e. they are in the robots path if it goes that direction).
+      bool admissible = true;
       for(size_t k = 0; k < ranges.size(); k++){
-        /*
-          ****************** WHERE IM NOT SURE *******************
-        */
-        // Check within radius of path ?!?!?!?
-        bool within_radius_of_path = true; // TODO
-        if(within_radius_of_path){
-        
-          // Check for Stopping Distance ?!?!?!?!
-          float stopping_distance = pow(v,2)/(2*MAX_V_acc);// v^2/(2* max_v_accel)
-          // I STRONGLY DONT THINK THIS IS CORRECT...but it could be
-          if(stopping_distance > ranges[k]){
-            skip_point = true;
-          }
+        Vector2f V_temp(v, w);
+        float current_theta = 2.0 * M_PI * (float(k) - 28.0)/360.0;
+        // Calculate the x,y cooridnates of the point in the laser scan
+        // NOTE for some reason I think its suppose to be cos = x and sin = y but I'm getting confused
+        Vector2f P(sin(current_theta) * ranges[k], cos(current_theta) * ranges[k]);
+        float free_path_length = 0.0;
+        bool is_obstacle = false; 
+        // This will tell us whether the current point in the laser scan we are looking at 
+        // makes the V,W pair inadmissible.
+        CheckPointUtility(V_temp, P, free_path_length, is_obstacle);
+        if (is_obstacle) {
+          // V is not an admissible speed because there is an obstacle in the way
+          admissible = false;
+          break;
         }
+
+        // Check for stopping distance
+	float stopping_distance = pow(v,2)/(2*MAX_V_acc);
+        /*
+         * The free_path_length is the distance we are going to travel
+         * so if the stopping distance isn't smaller than our free_path_length
+         * then we won't be have enough time to stop.
+         */
+	if(stopping_distance > free_path_length){
+	  admissible = false;
+          break;
+	}
       }
 
-      if(skip_point){
+      if(!admissible){
         continue;
       }
 
       // Calculate Cost
       float currCost = alpha*angle(v,w) + beta*dist(v,w) + gamma*velocity(v,w);
 
-      // Update
+      // Update best cost
       if(currCost < bestCost){
         bestCost = currCost;
         bestVW = Vector2f(v,w);
@@ -385,14 +398,44 @@ bool GetCommandVelService(
     }
     v += V_increment;
   }
+  
+  // We need to cap our choosen velocity vector to ensure it follows acceleration and velocity constraints.
+  // NOTE I believe the following should be correct but it is hard to tell (it makes sense to me)
+  Vector2f new_acceleration = (V - bestVW);
+  float delta_t = 1.0/20.0;
+  if (new_acceleration.x() > (0.5 * delta_t)) {// maxium linear acceleration .5m/s^2
+    new_acceleration.x() = .5;
+  }
+  if (new_acceleration.y() > (2.0 * delta_t)) {// maxium radial acceleration 2rad/s^2
+    new_acceleration.y() = 2;
+  }
 
+  // Initial velocity plus the acceleration
+  new_velocity = V + new_acceleration;
+  if (new_velocity.x() > .5) {// maxium linear velocity .5m/s
+    new_velocity.x() = .5;
+  }
+  if (new_velocity.y() > 1.5) {// maxium radial velocity 1.5 rad/s
+    new_velocity.y() = 1.5;
+  }
+
+  return true;
+}
+
+bool GetCommandVelService(
+    compsci403_assignment5::GetCommandVelSrv::Request& req,
+    compsci403_assignment5::GetCommandVelSrv::Response& res) {
+
+  const Vector2f V(req.v0.x, req.w0.z);
+  Vector2f new_velocity(0,0);
+  GetCommandVelUtility(V, req.Image, false, new_velocity);
   // Return the best velocity command
   // Cv is of type Point32 and its x component is the linear velocity towards forward direction
   // you do not need to fill its other components
-  res.Cv.x = bestVW.x();
+  res.Cv.x = new_velocity.x();
   // Cw is of type Point32 and its z component is the rotational velocity around z axis
   // you do not need to fill its other components
-  res.Cw.z = bestVW.y();
+  res.Cw.z = new_velocity.y();
 
   return true;
 }
@@ -410,8 +453,12 @@ void DepthImageCallback(const sensor_msgs::Image& depth_image) {
   // Use your code from all other parts to process the depth image, 
   // find the best velocity command and publish the velocity command
 
-  command_vel.linear.x = 0; // replace with your calculated linear velocity c_v
-  command_vel.angular.z = 0; // replace with your angular calculated velocity c_w
+  const Vector2f V(v0, w0);
+  Vector2f new_velocity(0,0);
+  GetCommandVelUtility(V, depth_image, true, new_velocity);
+
+  command_vel.linear.x = new_velocity.x();
+  command_vel.angular.z = new_velocity.y();
   velocity_command_publisher_.publish(command_vel);
 }
 
@@ -468,14 +515,8 @@ void LaserScanCallback(const sensor_msgs::PointCloud& point_cloud) {
 
   PointCloudToLaserScanUtility(points, ranges);
 
-  sensor_msgs::LaserScan laser_scan = sensor_msgs::LaserScan();
+  sensor_msgs::LaserScan laser_scan = PointCloudToLaserScanUtility(points, ranges);
   laser_scan.header = point_cloud.header;
-  laser_scan.ranges = ranges;
-  laser_scan.angle_increment = float(float((1.0/360.0))*2.0*M_PI); // One degree
-  laser_scan.angle_max = float(float((28.0/360.0))*2.0*M_PI); // 28 degrees
-  laser_scan.angle_min = float(float((-28.0/360.0))*2.0*M_PI); // -28 degrees
-  laser_scan.range_min = 0.8; //.8 meters
-  laser_scan.range_max = 4; //4 meters
 
   laserscan_cloud_publisher_.publish(laser_scan);
 }
@@ -493,6 +534,17 @@ int main(int argc, char **argv) {
       "/COMPSCI403/PointCloudToLaserScan", PointCloudToLaserScanService);
   ros::ServiceServer service4 = n.advertiseService(
       "/COMPSCI403/GetCommandVel", GetCommandVelService);
+
+  // This code will retrieve the transformation given by the service GetTransformation
+  ros::ServiceClient client = n.serviceClient<compsci403_assignment5::GetTransformationSrv>("GetTransformation");
+  compsci403_assignment5::GetTransformationSrv srv;
+  if (client.call(srv))
+  {
+    for(size_t i = 0; i < 9; i++){
+      R_transform[i] = srv.response.R[i];
+    }
+    T_transform = srv.response.T;
+  }
 
   velocity_command_publisher_ =
       n.advertise<geometry_msgs::Twist>("/cmd_vel_mux/input/navi", 1);

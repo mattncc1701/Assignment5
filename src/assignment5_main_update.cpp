@@ -7,7 +7,9 @@
 #include <math.h>
 
 #include <eigen3/Eigen/Dense>
+#include <visualization_msgs/Marker.h>
 #include <geometry_msgs/Point32.h>
+#include <geometry_msgs/Point.h>
 #include <sensor_msgs/LaserScan.h>
 #include <sensor_msgs/PointCloud.h>
 #include <sensor_msgs/Image.h>
@@ -35,6 +37,8 @@ using std::min;
 ros::Publisher velocity_command_publisher_;
 ros::Publisher obstacle_point_cloud_publisher_;
 ros::Publisher laserscan_cloud_publisher_;
+ros::Publisher dynamic_window_cloud_publisher_;
+ros::Publisher best_vw_publisher_;
 
 // Last received odometry message.
 Odometry last_odometry;
@@ -242,7 +246,7 @@ float dist(float v, float w){
 
   //float theta = (V.y() > 0) ? (atan2(P.x(), R - P.y())) : (atan2(P.x(), P.y() - R));
   //free_path_length = max(0.0f, float(theta * fabs(R) - 0.18f));
-
+  
   return 0;
 }
 
@@ -338,11 +342,27 @@ bool GetCommandVelUtility(Vector2f V, sensor_msgs::Image Image, const bool is_pa
   Vector2f bestVW = Vector2f(0,0);
   float bestCost = std::numeric_limits<float>::max();
 
+/*
+    TESTING PART 5 CREATING IMAGE.
+
+*/
+  // sensor_msgs::Image dynamic_window_image = sensor_msgs::Image();
+
+  // dynamic_window_image.header = Image.header;
+  // dynamic_window_image.height = W_WINDOW_SIZE;
+  // dynamic_window_image.width = V_WINDOW_SIZE;
+  // vector<char> image(V_WINDOW_SIZE * W_WINDOW_SIZE); 
+  // dynamic_window_image.data = image;// // int[V_WINDOW_SIZE * W_WINDOW_SIZE];
+
+
+
   float v = V_min;
   // ITERATE THROUGH ALL V,W PAIRS.
   for(int i = 0; i < V_WINDOW_SIZE; i++){
     float w = W_min;
     for(int j = 0; j < W_WINDOW_SIZE; j++){
+      // dynamic_window_image.data[image_index] = 1;
+
       // In the lecture slides it says you need the radius of curvature and the center
       // But that is done in the CheckPointUtility, which is why you need them in the first 
       // place and you don't need them anywhere else.
@@ -350,6 +370,8 @@ bool GetCommandVelUtility(Vector2f V, sensor_msgs::Image Image, const bool is_pa
       // Go through the laser scan (our obstacles) and see if any make the current V,W pair
       // inadmissible (i.e. they are in the robots path if it goes that direction).
       bool admissible = true;
+      float min_distance = std::numeric_limits<float>::max();;
+
       for(size_t k = 0; k < ranges.size(); k++){
         Vector2f V_temp(v, w);
         float current_theta = 2.0 * M_PI * (float(k) - 28.0)/360.0;
@@ -361,6 +383,7 @@ bool GetCommandVelUtility(Vector2f V, sensor_msgs::Image Image, const bool is_pa
         // This will tell us whether the current point in the laser scan we are looking at 
         // makes the V,W pair inadmissible.
         CheckPointUtility(V_temp, P, free_path_length, is_obstacle);
+
         if (is_obstacle) {
           // V is not an admissible speed because there is an obstacle in the way
           admissible = false;
@@ -368,16 +391,21 @@ bool GetCommandVelUtility(Vector2f V, sensor_msgs::Image Image, const bool is_pa
         }
 
         // Check for stopping distance
-	float stopping_distance = pow(v,2)/(2*MAX_V_acc);
+        float stopping_distance = pow(v,2)/(2*MAX_V_acc);
         /*
          * The free_path_length is the distance we are going to travel
          * so if the stopping distance isn't smaller than our free_path_length
          * then we won't be have enough time to stop.
          */
-	if(stopping_distance > free_path_length){
-	  admissible = false;
-          break;
-	}
+        if(stopping_distance > free_path_length){
+          admissible = false;
+                break;
+        }
+
+        if(min_distance > free_path_length){
+          min_distance = free_path_length;
+        }
+
       }
 
       if(!admissible){
@@ -385,7 +413,9 @@ bool GetCommandVelUtility(Vector2f V, sensor_msgs::Image Image, const bool is_pa
       }
 
       // Calculate Cost
-      float currCost = alpha*angle(v,w) + beta*dist(v,w) + gamma*velocity(v,w);
+      // float currCost = alpha*angle(v,w) + beta*dist(v,w) + gamma*velocity(v,w);
+      // NEED FREE PATH LENGTH HERE.
+      float currCost = alpha*angle(v,w) + beta*min_distance + gamma*velocity(v,w);
 
       // Update best cost
       if(currCost < bestCost){
@@ -398,27 +428,32 @@ bool GetCommandVelUtility(Vector2f V, sensor_msgs::Image Image, const bool is_pa
     }
     v += V_increment;
   }
-  
-  // We need to cap our choosen velocity vector to ensure it follows acceleration and velocity constraints.
-  // NOTE I believe the following should be correct but it is hard to tell (it makes sense to me)
-  Vector2f new_acceleration = (V - bestVW);
-  float delta_t = 1.0/20.0;
-  if (new_acceleration.x() > (0.5 * delta_t)) {// maxium linear acceleration .5m/s^2
-    new_acceleration.x() = .5;
-  }
-  if (new_acceleration.y() > (2.0 * delta_t)) {// maxium radial acceleration 2rad/s^2
-    new_acceleration.y() = 2;
-  }
 
-  // Initial velocity plus the acceleration
-  new_velocity = V + new_acceleration;
-  if (new_velocity.x() > .5) {// maxium linear velocity .5m/s
-    new_velocity.x() = .5;
-  }
-  if (new_velocity.y() > 1.5) {// maxium radial velocity 1.5 rad/s
-    new_velocity.y() = 1.5;
-  }
+  // dynamic_window_cloud_publisher_.publish(dynamic_window_image);
 
+  // visualization_msgs::Marker marker; 
+  // marker.header.frame_id = "base_laser";
+  // marker.header.stamp = Image.header.stamp;
+  // marker.scale.x = 0.1; 
+  // marker.scale.y = 0.2; 
+  // marker.color.a = 0.5; 
+  // marker.color.r = 255; 
+  // marker.type = marker.ARROW; 
+  // marker.action = 0; 
+  // geometry_msgs::Point point1; 
+  // point1.x = 0; 
+  // point1.y = 0;
+  // point1.z = 0; 
+  // geometry_msgs::Point point2;
+  // point2.x = 1;
+  // point2.y = 1; 
+  // point2.z = 0; 
+  // marker.points.resize(2);
+  // marker.points[0] = point1;
+  // marker.points[1] = point2;
+  // best_vw_publisher_.publish(marker);
+
+  new_velocity = bestVW;
   return true;
 }
 
@@ -556,6 +591,13 @@ int main(int argc, char **argv) {
   // PART 3: TEST PUBLISHER FOR LASER SCAN 
   laserscan_cloud_publisher_ =
       n.advertise<sensor_msgs::LaserScan>("/COMPSCI403/LaserScan", 1);
+
+  // PART 5: TEST PUBLISHER FOR DYNAMIC WINDOW 
+  dynamic_window_cloud_publisher_ =
+      n.advertise<sensor_msgs::Image>("/COMPSCI403/DynamicWindow", 1);
+
+  best_vw_publisher_ =
+      n.advertise<visualization_msgs::Marker>("/COMPSCI403/BestVW", 1);
 
   ros::Subscriber depth_image_subscriber =
       n.subscribe("/Cobot/Kinect/Depth", 1, DepthImageCallback);

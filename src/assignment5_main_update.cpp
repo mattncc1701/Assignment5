@@ -15,6 +15,7 @@
 #include <sensor_msgs/Image.h>
 #include <geometry_msgs/Twist.h>
 #include <nav_msgs/Odometry.h>
+#include "ros/ros.h"
 
 #include "compsci403_assignment5/CheckPointSrv.h"
 #include "compsci403_assignment5/ObstaclePointCloudSrv.h"
@@ -33,18 +34,22 @@ using std::vector;
 using std::max;
 using std::min;
 
+// export ROS_PACKAGE_PATH=`pwd`:$ROS_PACKAGE_PATH 
+// rosnode kill -a
+
 // Publisher for velocity command.
 ros::Publisher velocity_command_publisher_;
 ros::Publisher obstacle_point_cloud_publisher_;
 ros::Publisher laserscan_cloud_publisher_;
 ros::Publisher dynamic_window_cloud_publisher_;
 ros::Publisher best_vw_publisher_;
+ros::Publisher point_cloud_publisher_;
 
 // Last received odometry message.
 Odometry last_odometry;
 
 // Last receieved transformation parameters
-float R_transform[9];
+float R_transform[] = {1,0,0,0,1,0,0,0,1};
 Point32 T_transform;
 
 // INTRINSICS
@@ -122,6 +127,8 @@ bool CheckPointService(
 
 // bool ObstaclePointCloudUtility(float32[] R, Point32 T, Point32[] P, Point32[] P_prime) {
 bool ObstaclePointCloudUtility(float R_req[], geometry_msgs::Point32 T_req, vector<Vector3f> point_cloud, vector<Vector3f>& obstacle_point_cloud) {
+  cout << "ObstaclePointCloudUtility" << "\n";
+  cout << "Point cloud size: " << point_cloud.size() << "\n";
 
   // ROTATION
   Matrix3f R;
@@ -132,6 +139,7 @@ bool ObstaclePointCloudUtility(float R_req[], geometry_msgs::Point32 T_req, vect
   }
 
   // TRANSLATION
+  int skip = 0;
   const Vector3f T(T_req.x, T_req.y, T_req.z);
 
   // Write code here to transform the input point cloud from the Kinect reference frame to the
@@ -146,13 +154,15 @@ bool ObstaclePointCloudUtility(float R_req[], geometry_msgs::Point32 T_req, vect
 
     // Check Min and Max z.
     if (currPoint.z() <= 0.0375 || currPoint.z() > .36) {
+      skip++;
       continue;
     }
 
     // Insert Valid Filtered Point.
     (obstacle_point_cloud).insert((obstacle_point_cloud).end(), currPoint);
   }
-
+  cout << "Skipped: " << skip << "\n";
+  cout << "Obstacle Point Cloud Size: " << obstacle_point_cloud.size() << "\n";
   return true;
 }
 
@@ -300,6 +310,20 @@ bool GetCommandVelUtility(Vector2f V, sensor_msgs::Image Image, const bool is_pa
       float X = ((x - px)*1.0 / fx ) * Z;
       float Y = ((y - py)*1.0 / fy ) * Z;
 
+      point.x() = X;
+      point.y() = Y;
+      point.z() = Z;
+
+      // ROTATE BY y AXIS PI/2
+      if(is_part5){
+        X = 0 + 0 + point.z();
+        Y = 0 + point.y() + 0;
+        Z = -point.x() + 0 + 0;
+
+        point.x() = X;
+        point.y() = Y;
+        point.z() = Z;
+      } 
       point = Vector3f(X,Y,Z);
 
       point_cloud.push_back(point);
@@ -312,7 +336,7 @@ bool GetCommandVelUtility(Vector2f V, sensor_msgs::Image Image, const bool is_pa
   } else {
     obstacle_point_cloud = point_cloud;
   }
-
+  cout << "outside method onstacle cloud size: " << obstacle_point_cloud.size() <<"\n";
   
   // Use your code from part 3 to convert the point cloud to a laser scan
   vector<float> ranges;
@@ -419,6 +443,7 @@ bool GetCommandVelUtility(Vector2f V, sensor_msgs::Image Image, const bool is_pa
 
       // Update best cost
       if(currCost < bestCost){
+
         bestCost = currCost;
         bestVW = Vector2f(v,w);
       }
@@ -431,29 +456,30 @@ bool GetCommandVelUtility(Vector2f V, sensor_msgs::Image Image, const bool is_pa
 
   // dynamic_window_cloud_publisher_.publish(dynamic_window_image);
 
-  // visualization_msgs::Marker marker; 
-  // marker.header.frame_id = "base_laser";
-  // marker.header.stamp = Image.header.stamp;
-  // marker.scale.x = 0.1; 
-  // marker.scale.y = 0.2; 
-  // marker.color.a = 0.5; 
-  // marker.color.r = 255; 
-  // marker.type = marker.ARROW; 
-  // marker.action = 0; 
-  // geometry_msgs::Point point1; 
-  // point1.x = 0; 
-  // point1.y = 0;
-  // point1.z = 0; 
-  // geometry_msgs::Point point2;
-  // point2.x = 1;
-  // point2.y = 1; 
-  // point2.z = 0; 
-  // marker.points.resize(2);
-  // marker.points[0] = point1;
-  // marker.points[1] = point2;
-  // best_vw_publisher_.publish(marker);
+  visualization_msgs::Marker marker; 
+  marker.header.frame_id = "kinect_0";
+  marker.header.stamp = Image.header.stamp;
+  marker.scale.x = 0.1; 
+  marker.scale.y = 0.2; 
+  marker.color.a = 0.5; 
+  marker.color.r = 255; 
+  marker.type = marker.ARROW; 
+  marker.action = 0; 
+  geometry_msgs::Point point1; 
+  point1.x = 0; 
+  point1.y = 0;
+  point1.z = 0; 
+  geometry_msgs::Point point2;
+  point2.x = 1;
+  point2.y = 1; 
+  point2.z = 0; 
+  marker.points.resize(2);
+  marker.points[0] = point1;
+  marker.points[1] = point2;
+  best_vw_publisher_.publish(marker);
 
   new_velocity = bestVW;
+
   return true;
 }
 
@@ -494,7 +520,53 @@ void DepthImageCallback(const sensor_msgs::Image& depth_image) {
 
   command_vel.linear.x = new_velocity.x();
   command_vel.angular.z = new_velocity.y();
+
+  cout <<" Res: " << new_velocity.x() << " " << new_velocity.y() << "\n";
+
+
   velocity_command_publisher_.publish(command_vel);
+
+  // PUBLISH IMAGE AS POINT CLOUD
+  sensor_msgs::PointCloud point_cloud;
+  point_cloud.header = depth_image.header;
+
+  for (unsigned int y = 0; y < depth_image.height; ++y) {
+    for (unsigned int x = 0; x < depth_image.width; ++x) {
+      uint16_t byte0 = depth_image.data[2 * (x + y * depth_image.width) + 0];
+      uint16_t byte1 = depth_image.data[2 * (x + y * depth_image.width) + 1];
+      if (!depth_image.is_bigendian) {
+        std::swap(byte0, byte1);
+      }
+      // Combine the two bytes to form a 16 bit value, and disregard the
+      // most significant 4 bits to extract the lowest 12 bits.
+      const uint16_t raw_depth = ((byte0 << 8) | byte1) & 0x7FF;
+      // Reconstruct 3D point from x, y, raw_depth.
+      geometry_msgs::Point32 point;
+      // Modify the following lines of code to do the right thing, with the
+      // correct parameters.
+      float depth =  1.0 / (a + (b*raw_depth));
+      float Z =  depth;
+      float X = ((x - px)*1.0 / fx ) * Z;
+      float Y = ((y - py)*1.0 / fy ) * Z;
+
+      point.x = X;
+      point.y = Y;
+      point.z = Z;
+
+      // ROTATE BY y AXIS PI/2
+      X = 0 + 0 + point.z;
+      Y = 0 + point.y + 0;
+      Z = -point.x + 0 + 0;
+
+      point.x = X;
+      point.y = Y;
+      point.z = Z;
+
+      point_cloud.points.push_back(point);
+    }
+  }
+  point_cloud_publisher_.publish(point_cloud);
+
 }
 
 // Part 2: Test
@@ -579,6 +651,10 @@ int main(int argc, char **argv) {
       R_transform[i] = srv.response.R[i];
     }
     T_transform = srv.response.T;
+  }else{
+    T_transform.x = 0.13; 
+    T_transform.y = 0; 
+    T_transform.z = 0.305; 
   }
 
   velocity_command_publisher_ =
@@ -599,17 +675,29 @@ int main(int argc, char **argv) {
   best_vw_publisher_ =
       n.advertise<visualization_msgs::Marker>("/COMPSCI403/BestVW", 1);
 
+  // PART 5: TEST PUBLISHER FOR POINT CLOUD ASSIGNMENT 5 BAG 
+  point_cloud_publisher_ =
+      n.advertise<sensor_msgs::PointCloud>("/COMPSCI403/BAG_POINT_CLOUD", 1);
+
+
   ros::Subscriber depth_image_subscriber =
       n.subscribe("/Cobot/Kinect/Depth", 1, DepthImageCallback);
   ros::Subscriber odometry_subscriber =
       n.subscribe("/odom", 1, OdometryCallback);
 
+  // // PART 2: Subscribed to FilteredPointCloud
+  // ros::Subscriber filtered_point_cloud_subscriber =
+  //     n.subscribe("/Cobot/Kinect/FilteredPointCloud", 1, FilteredPointCloudCallback);
+  // // PART 3: Subscribed to FilteredPointCloud. doing stuff with lasers.
+  // ros::Subscriber laserscan_cloud_subscriber =
+  //     n.subscribe("/Cobot/Kinect/FilteredPointCloud", 1, LaserScanCallback);
+  // SWITCHED FOR PART 5 ****************
   // PART 2: Subscribed to FilteredPointCloud
-  ros::Subscriber filtered_point_cloud_subscriber =
-      n.subscribe("/Cobot/Kinect/FilteredPointCloud", 1, FilteredPointCloudCallback);
+  // ros::Subscriber filtered_point_cloud_subscriber =
+  //     n.subscribe("/COMPSCI403/BAG_POINT_CLOUD", 1, FilteredPointCloudCallback);
   // PART 3: Subscribed to FilteredPointCloud. doing stuff with lasers.
-  ros::Subscriber laserscan_cloud_subscriber =
-      n.subscribe("/Cobot/Kinect/FilteredPointCloud", 1, LaserScanCallback);
+  // ros::Subscriber laserscan_cloud_subscriber =
+  //     n.subscribe("/COMPSCI403/BAG_POINT_CLOUD", 1, LaserScanCallback);
 
   ros::spin();
 

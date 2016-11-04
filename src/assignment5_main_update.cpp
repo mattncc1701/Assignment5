@@ -38,6 +38,9 @@ using std::min;
 /* 
 export ROS_PACKAGE_PATH=`pwd`:$ROS_PACKAGE_PATH 
 rosnode kill -a
+
+look at max acceleration
+
 */
 // Publisher for velocity command.
 ros::Publisher velocity_command_publisher_;
@@ -90,7 +93,7 @@ geometry_msgs::Point32 ConvertVectorToPoint(const Vector3f& vector) {
 void CheckPointUtility(Vector2f V, Vector2f P, float& free_path_length, bool& is_obstacle) {
   if (fabs(V.y()) > 0) {
     const float R = V.x() / V.y();
-    Vector2f C(0, R);
+    Vector2f C(0, R)  ;
     if (fabs((P-C).norm() - fabs(R)) < 0.18f) {
       is_obstacle = true;
       float theta = (V.y() > 0) ? (atan2(P.x(), R - P.y())) : (atan2(P.x(), P.y() - R));
@@ -202,7 +205,7 @@ sensor_msgs::LaserScan PointCloudToLaserScanUtility(vector<Vector3f> point_cloud
     // Project point to the ground plan
     temp.z() = 0;
     // Calculate the points angle in relation to the bot
-    float theta = atan2(temp.y(), temp.x());
+    float theta = atan2(-temp.y(), temp.x());
     // .488692 == 28 degress in radians. Removes outliers
     if (theta > .488692 || theta < -.488692) {
       continue;
@@ -340,8 +343,8 @@ bool GetCommandVelUtility(Vector2f V, sensor_msgs::Image Image, const bool is_pa
   float W_increment = (W_max-W_min)/W_WINDOW_SIZE;
 
   // COST PARAMETERS (FROM PDF ON DYNAMIC WINDOWS).
-  float alpha = 0.4;
-  float beta = 1000000.0;
+  float alpha = 0.2;
+  float beta = 2.0;
   float gamma = 1.0;
 
   // BEST V,W
@@ -363,18 +366,20 @@ bool GetCommandVelUtility(Vector2f V, sensor_msgs::Image Image, const bool is_pa
         float current_theta = 2.0 * M_PI * (float(k) - 28.0)/360.0;
         // Calculate the x,y cooridnates of the point in the laser scan
         // NOTE for some reason I think its suppose to be cos = x and sin = y but I'm getting confused
-        Vector2f P(sin(current_theta) * ranges[k], cos(current_theta) * ranges[k]);
+        // Vector2f P(sin(current_theta) * ranges[k], cos(current_theta) * ranges[k]);
+        Vector2f P(cos(current_theta) * ranges[k], sin(current_theta) * ranges[k]);
+
         float free_path_length = 0.0;
         bool is_obstacle = false; 
         // This will tell us whether the current point in the laser scan we are looking at 
         // makes the V,W pair inadmissible.
         CheckPointUtility(V_temp, P, free_path_length, is_obstacle);
 
-        if (is_obstacle) {
-          // V is not an admissible speed because there is an obstacle in the way
-          admissible = false;
-          break;
-        }
+        // if (is_obstacle) {
+        //   // V is not an admissible speed because there is an obstacle in the way
+        //   admissible = false;
+        //   break;
+        // }
 
         // Check for stopping distance
         float stopping_distance = pow(v,2)/(2*MAX_V_acc);
@@ -404,14 +409,15 @@ bool GetCommandVelUtility(Vector2f V, sensor_msgs::Image Image, const bool is_pa
       }
 
       // Calculate Cost
-      float currCost = alpha*fabs(w) + beta/min_distance + gamma/velocity(v,w);
+      // float currCost = alpha*fabs(w) + beta/min_distance + gamma/velocity(v,w);
+      float currCost = alpha*fabs(w) - beta*min_distance - gamma*velocity(v,w);
 
       // Update best cost
       if(currCost < bestCost){
         // cout << "Best Cost: " << "Distance: " << beta/min_distance << " Angle: " << alpha*fabs(w) << "  Velocity : " << gamma/velocity(v,w) << "\n";
         // cout << currCost << " \n";
         bestCost = currCost;
-        bestVW = Vector2f(v,-w);
+        bestVW = Vector2f(v,w);
       }
 
       w += W_increment;

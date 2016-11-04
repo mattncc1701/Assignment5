@@ -34,16 +34,20 @@ using std::vector;
 using std::max;
 using std::min;
 
-// export ROS_PACKAGE_PATH=`pwd`:$ROS_PACKAGE_PATH 
-// rosnode kill -a
-
+// GOOD TO KNOW COMMANDS FOR ACTUAL ROBOT.
+/* 
+export ROS_PACKAGE_PATH=`pwd`:$ROS_PACKAGE_PATH 
+rosnode kill -a
+*/
 // Publisher for velocity command.
 ros::Publisher velocity_command_publisher_;
 ros::Publisher obstacle_point_cloud_publisher_;
 ros::Publisher laserscan_cloud_publisher_;
 ros::Publisher dynamic_window_cloud_publisher_;
 ros::Publisher best_vw_publisher_;
+ros::Publisher best_v_publisher_;
 ros::Publisher point_cloud_publisher_;
+ros::Publisher best_point_cloud_publisher_;
 
 // Last received odometry message.
 Odometry last_odometry;
@@ -63,10 +67,8 @@ const float b = -0.002745;
 // ROBOT LIMITS
 const float MAX_V = 0.5;
 const float MAX_ROT = 1.5;
-
 const float MAX_V_acc = 0.5;
 const float MAX_ROT_acc = 2;
-
 const float TIME_STEP = 0.05;
 
 // Helper function to convert ROS Point32 to Eigen Vectors.
@@ -94,14 +96,16 @@ void CheckPointUtility(Vector2f V, Vector2f P, float& free_path_length, bool& is
       float theta = (V.y() > 0) ? (atan2(P.x(), R - P.y())) : (atan2(P.x(), P.y() - R));
       free_path_length = max(0.0f, float(theta * fabs(R) - 0.18f));
     } else {
-      free_path_length = std::numeric_limits<float>::max();
+      free_path_length = 4.0;
+      // free_path_length = std::numeric_limits<float>::max();
     }
   } else {
     if (fabs(P.y()) < 0.18f) {
       is_obstacle = true;
       free_path_length = max(0.0f, P.x() - 0.18f);
     } else {
-      free_path_length = std::numeric_limits<float>::max();
+      free_path_length = 4.0;
+      // free_path_length = std::numeric_limits<float>::max();
     }
   }
 }
@@ -124,11 +128,7 @@ bool CheckPointService(
   return true;
 }
 
-
-// bool ObstaclePointCloudUtility(float32[] R, Point32 T, Point32[] P, Point32[] P_prime) {
 bool ObstaclePointCloudUtility(float R_req[], geometry_msgs::Point32 T_req, vector<Vector3f> point_cloud, vector<Vector3f>& obstacle_point_cloud) {
-  cout << "ObstaclePointCloudUtility" << "\n";
-  cout << "Point cloud size: " << point_cloud.size() << "\n";
 
   // ROTATION
   Matrix3f R;
@@ -139,7 +139,6 @@ bool ObstaclePointCloudUtility(float R_req[], geometry_msgs::Point32 T_req, vect
   }
 
   // TRANSLATION
-  int skip = 0;
   const Vector3f T(T_req.x, T_req.y, T_req.z);
 
   // Write code here to transform the input point cloud from the Kinect reference frame to the
@@ -154,15 +153,12 @@ bool ObstaclePointCloudUtility(float R_req[], geometry_msgs::Point32 T_req, vect
 
     // Check Min and Max z.
     if (currPoint.z() <= 0.0375 || currPoint.z() > .36) {
-      skip++;
       continue;
     }
 
     // Insert Valid Filtered Point.
     (obstacle_point_cloud).insert((obstacle_point_cloud).end(), currPoint);
   }
-  cout << "Skipped: " << skip << "\n";
-  cout << "Obstacle Point Cloud Size: " << obstacle_point_cloud.size() << "\n";
   return true;
 }
 
@@ -198,7 +194,7 @@ bool ObstaclePointCloudService(
 sensor_msgs::LaserScan PointCloudToLaserScanUtility(vector<Vector3f> point_cloud, vector<float>& ranges){
   // Set all of the ranges to be inifintely far away
   for (int i = 0; i < 56; ++i) {
-    ranges.insert(ranges.begin(), std::numeric_limits<float>::max());
+    ranges.insert(ranges.begin(), 4.0);
   }
 
   for (size_t i = 0; i < point_cloud.size(); ++i) {
@@ -249,34 +245,11 @@ bool PointCloudToLaserScanService(
 }
 
 float velocity(float v,float w){
-  return sqrt(pow(v,2) + pow(w,2));
-}
-
-float dist(float v, float w){
-
-  //float theta = (V.y() > 0) ? (atan2(P.x(), R - P.y())) : (atan2(P.x(), P.y() - R));
-  //free_path_length = max(0.0f, float(theta * fabs(R) - 0.18f));
-  
-  return 0;
+  return v;
 }
 
 float angle(float v, float w){
-  // Goal Heading
-  //float v_goal = 1.0;
-  //float w_goal = 0.0;
-  //float dot = v*v_goal + w*w_goal;        // dot product
-  //float det = v*w_goal - w*v_goal;       //determinant
-  //float angle = atan2(det, dot);        // atan2(y, x) or atan2(sin, cos)
-
-  /* 
-   * NOTE Come to think of it I believe the angle is just like
-   * how we did it in assignment 4 where theta = atan2(V.y, V.x)
-   * I could be wrong but I believe we should just be passing back
-   * atan2(w, v) since that would be angle of the velocity vector
-   * compared with the vector going straight forward. To be honest your
-   * code may do the same thing but it is too late at night for me to be thinking of this.
-   */ 
-  return atan2(w, v);
+   return fabs(1/w);
 }
 
 bool GetCommandVelUtility(Vector2f V, sensor_msgs::Image Image, const bool is_part5, Vector2f& new_velocity) {
@@ -289,7 +262,6 @@ bool GetCommandVelUtility(Vector2f V, sensor_msgs::Image Image, const bool is_pa
   for (unsigned int y = 0; y < Image.height; ++y) {
     for (unsigned int x = 0; x < Image.width; ++x) {
       // Add code here to only process only every nth pixel
-      // NOTE THIS COULD BE INCORRECT
       if (((x+y) % 10) != 0) { // assuming n = 10 like it says in part 4
         continue;
       }      
@@ -336,12 +308,22 @@ bool GetCommandVelUtility(Vector2f V, sensor_msgs::Image Image, const bool is_pa
   } else {
     obstacle_point_cloud = point_cloud;
   }
-  cout << "outside method onstacle cloud size: " << obstacle_point_cloud.size() <<"\n";
+
+  // TEST PART 5: PUBLISH NEW FILTERED POINT CLOUD.
+  sensor_msgs::PointCloud point_cloud_result;
+  point_cloud_result.header = Image.header;
+  for (size_t i = 0; i < obstacle_point_cloud.size(); ++i) {
+    point_cloud_result.points.insert(point_cloud_result.points.end(), ConvertVectorToPoint(obstacle_point_cloud[i]));
+  }
+  best_point_cloud_publisher_.publish(point_cloud_result);
+
   
   // Use your code from part 3 to convert the point cloud to a laser scan
   vector<float> ranges;
   // I changed the utility function to return a LaserScan object to make our lives easier
   sensor_msgs::LaserScan laser_scan = PointCloudToLaserScanUtility(obstacle_point_cloud, ranges);
+  laser_scan.header = Image.header;
+  laserscan_cloud_publisher_.publish(laser_scan);
 
   // Implement dynamic windowing approach to find the best velocity command for next time step
   float V_min = max(float(0.0), V.x() - (MAX_V_acc * TIME_STEP));
@@ -351,46 +333,26 @@ bool GetCommandVelUtility(Vector2f V, sensor_msgs::Image Image, const bool is_pa
   float W_min = max(-MAX_ROT, V.y() - (MAX_ROT_acc * TIME_STEP));
   float W_max = min(MAX_ROT, V.y() + (MAX_ROT_acc * TIME_STEP));
 
-  int V_WINDOW_SIZE = 20;
-  int W_WINDOW_SIZE = 20;
+  int V_WINDOW_SIZE = 21;
+  int W_WINDOW_SIZE = 40;
 
   float V_increment = (V_max-V_min)/V_WINDOW_SIZE;
-  float W_increment = (W_max-V_min)/W_WINDOW_SIZE;
+  float W_increment = (W_max-W_min)/W_WINDOW_SIZE;
 
   // COST PARAMETERS (FROM PDF ON DYNAMIC WINDOWS).
-  float alpha = 0.2;
-  float beta = 2.0;
-  float gamma = 0.2;
+  float alpha = 0.4;
+  float beta = 1000000.0;
+  float gamma = 1.0;
 
   // BEST V,W
   Vector2f bestVW = Vector2f(0,0);
   float bestCost = std::numeric_limits<float>::max();
-
-/*
-    TESTING PART 5 CREATING IMAGE.
-
-*/
-  // sensor_msgs::Image dynamic_window_image = sensor_msgs::Image();
-
-  // dynamic_window_image.header = Image.header;
-  // dynamic_window_image.height = W_WINDOW_SIZE;
-  // dynamic_window_image.width = V_WINDOW_SIZE;
-  // vector<char> image(V_WINDOW_SIZE * W_WINDOW_SIZE); 
-  // dynamic_window_image.data = image;// // int[V_WINDOW_SIZE * W_WINDOW_SIZE];
-
-
 
   float v = V_min;
   // ITERATE THROUGH ALL V,W PAIRS.
   for(int i = 0; i < V_WINDOW_SIZE; i++){
     float w = W_min;
     for(int j = 0; j < W_WINDOW_SIZE; j++){
-      // dynamic_window_image.data[image_index] = 1;
-
-      // In the lecture slides it says you need the radius of curvature and the center
-      // But that is done in the CheckPointUtility, which is why you need them in the first 
-      // place and you don't need them anywhere else.
-
       // Go through the laser scan (our obstacles) and see if any make the current V,W pair
       // inadmissible (i.e. they are in the robots path if it goes that direction).
       bool admissible = true;
@@ -426,8 +388,8 @@ bool GetCommandVelUtility(Vector2f V, sensor_msgs::Image Image, const bool is_pa
                 break;
         }
 
-        if(min_distance > free_path_length){
-          min_distance = free_path_length;
+        if(min_distance > (free_path_length - stopping_distance)){
+          min_distance = (free_path_length - stopping_distance);
         }
 
       }
@@ -436,26 +398,29 @@ bool GetCommandVelUtility(Vector2f V, sensor_msgs::Image Image, const bool is_pa
         continue;
       }
 
+      // Limit to range finder MAX.
+      if (min_distance > 4) {
+        min_distance = 4;
+      }
+
       // Calculate Cost
-      // float currCost = alpha*angle(v,w) + beta*dist(v,w) + gamma*velocity(v,w);
-      // NEED FREE PATH LENGTH HERE.
-      float currCost = alpha*angle(v,w) + beta*min_distance + gamma*velocity(v,w);
+      float currCost = alpha*fabs(w) + beta/min_distance + gamma/velocity(v,w);
 
       // Update best cost
       if(currCost < bestCost){
-
+        // cout << "Best Cost: " << "Distance: " << beta/min_distance << " Angle: " << alpha*fabs(w) << "  Velocity : " << gamma/velocity(v,w) << "\n";
+        // cout << currCost << " \n";
         bestCost = currCost;
-        bestVW = Vector2f(v,w);
+        bestVW = Vector2f(v,-w);
       }
-
 
       w += W_increment;
     }
     v += V_increment;
   }
+  // cout << "::FINAL ANSWER:: \n";
 
-  // dynamic_window_cloud_publisher_.publish(dynamic_window_image);
-
+  // MARKER for best W.
   visualization_msgs::Marker marker; 
   marker.header.frame_id = "kinect_0";
   marker.header.stamp = Image.header.stamp;
@@ -471,12 +436,31 @@ bool GetCommandVelUtility(Vector2f V, sensor_msgs::Image Image, const bool is_pa
   point1.z = 0; 
   geometry_msgs::Point point2;
   point2.x = 1;
-  point2.y = 1; 
+  point2.y = bestVW.y(); // HERE 
   point2.z = 0; 
   marker.points.resize(2);
   marker.points[0] = point1;
   marker.points[1] = point2;
   best_vw_publisher_.publish(marker);
+
+  // MARKER for best V.
+  visualization_msgs::Marker best_v; 
+  best_v.header.frame_id = "kinect_0";
+  best_v.header.stamp = Image.header.stamp;
+  best_v.scale.x = 0.1; 
+  best_v.scale.y = 0.2; 
+  best_v.color.a = 0.5; 
+  best_v.color.r = 255; 
+  best_v.type = marker.ARROW; 
+  best_v.action = 0; 
+  geometry_msgs::Point pointV;
+  pointV.x = bestVW.x(); // HERE
+  pointV.y = 0; 
+  pointV.z = 0; 
+  best_v.points.resize(2);
+  best_v.points[0] = point1;
+  best_v.points[1] = pointV;
+  best_v_publisher_.publish(best_v);
 
   new_velocity = bestVW;
 
@@ -521,51 +505,52 @@ void DepthImageCallback(const sensor_msgs::Image& depth_image) {
   command_vel.linear.x = new_velocity.x();
   command_vel.angular.z = new_velocity.y();
 
-  cout <<" Res: " << new_velocity.x() << " " << new_velocity.y() << "\n";
+  cout <<" (V,W): " << new_velocity.x() << " " << new_velocity.y() << "\n";
 
 
   velocity_command_publisher_.publish(command_vel);
 
+  // This was only used for testing.
   // PUBLISH IMAGE AS POINT CLOUD
-  sensor_msgs::PointCloud point_cloud;
-  point_cloud.header = depth_image.header;
+  // sensor_msgs::PointCloud point_cloud;
+  // point_cloud.header = depth_image.header;
 
-  for (unsigned int y = 0; y < depth_image.height; ++y) {
-    for (unsigned int x = 0; x < depth_image.width; ++x) {
-      uint16_t byte0 = depth_image.data[2 * (x + y * depth_image.width) + 0];
-      uint16_t byte1 = depth_image.data[2 * (x + y * depth_image.width) + 1];
-      if (!depth_image.is_bigendian) {
-        std::swap(byte0, byte1);
-      }
-      // Combine the two bytes to form a 16 bit value, and disregard the
-      // most significant 4 bits to extract the lowest 12 bits.
-      const uint16_t raw_depth = ((byte0 << 8) | byte1) & 0x7FF;
-      // Reconstruct 3D point from x, y, raw_depth.
-      geometry_msgs::Point32 point;
-      // Modify the following lines of code to do the right thing, with the
-      // correct parameters.
-      float depth =  1.0 / (a + (b*raw_depth));
-      float Z =  depth;
-      float X = ((x - px)*1.0 / fx ) * Z;
-      float Y = ((y - py)*1.0 / fy ) * Z;
+  // for (unsigned int y = 0; y < depth_image.height; ++y) {
+  //   for (unsigned int x = 0; x < depth_image.width; ++x) {
+  //     uint16_t byte0 = depth_image.data[2 * (x + y * depth_image.width) + 0];
+  //     uint16_t byte1 = depth_image.data[2 * (x + y * depth_image.width) + 1];
+  //     if (!depth_image.is_bigendian) {
+  //       std::swap(byte0, byte1);
+  //     }
+  //     // Combine the two bytes to form a 16 bit value, and disregard the
+  //     // most significant 4 bits to extract the lowest 12 bits.
+  //     const uint16_t raw_depth = ((byte0 << 8) | byte1) & 0x7FF;
+  //     // Reconstruct 3D point from x, y, raw_depth.
+  //     geometry_msgs::Point32 point;
+  //     // Modify the following lines of code to do the right thing, with the
+  //     // correct parameters.
+  //     float depth =  1.0 / (a + (b*raw_depth));
+  //     float Z =  depth;
+  //     float X = ((x - px)*1.0 / fx ) * Z;
+  //     float Y = ((y - py)*1.0 / fy ) * Z;
 
-      point.x = X;
-      point.y = Y;
-      point.z = Z;
+  //     point.x = X;
+  //     point.y = Y;
+  //     point.z = Z;
 
-      // ROTATE BY y AXIS PI/2
-      X = 0 + 0 + point.z;
-      Y = 0 + point.y + 0;
-      Z = -point.x + 0 + 0;
+  //     // ROTATE BY y AXIS PI/2
+  //     X = 0 + 0 + point.z;
+  //     Y = 0 + point.y + 0;
+  //     Z = -point.x + 0 + 0;
 
-      point.x = X;
-      point.y = Y;
-      point.z = Z;
+  //     point.x = X;
+  //     point.y = Y;
+  //     point.z = Z;
 
-      point_cloud.points.push_back(point);
-    }
-  }
-  point_cloud_publisher_.publish(point_cloud);
+  //     point_cloud.points.push_back(point);
+  //   }
+  // }
+  // point_cloud_publisher_.publish(point_cloud);
 
 }
 
@@ -620,7 +605,7 @@ void LaserScanCallback(const sensor_msgs::PointCloud& point_cloud) {
     points[i] = ConvertPointToVector(point_cloud.points[i]);
   }
 
-  PointCloudToLaserScanUtility(points, ranges);
+  // PointCloudToLaserScanUtility(points, ranges);
 
   sensor_msgs::LaserScan laser_scan = PointCloudToLaserScanUtility(points, ranges);
   laser_scan.header = point_cloud.header;
@@ -675,6 +660,13 @@ int main(int argc, char **argv) {
   best_vw_publisher_ =
       n.advertise<visualization_msgs::Marker>("/COMPSCI403/BestVW", 1);
 
+  best_v_publisher_ =
+      n.advertise<visualization_msgs::Marker>("/COMPSCI403/Part5BestV", 1);
+
+  // PART 5: TEST BEST POINT CLOUD.
+  best_point_cloud_publisher_ =
+      n.advertise<sensor_msgs::PointCloud>("/COMPSCI403/Part5PointCloud", 1);
+
   // PART 5: TEST PUBLISHER FOR POINT CLOUD ASSIGNMENT 5 BAG 
   point_cloud_publisher_ =
       n.advertise<sensor_msgs::PointCloud>("/COMPSCI403/BAG_POINT_CLOUD", 1);
@@ -686,18 +678,11 @@ int main(int argc, char **argv) {
       n.subscribe("/odom", 1, OdometryCallback);
 
   // // PART 2: Subscribed to FilteredPointCloud
-  // ros::Subscriber filtered_point_cloud_subscriber =
-  //     n.subscribe("/Cobot/Kinect/FilteredPointCloud", 1, FilteredPointCloudCallback);
+  ros::Subscriber filtered_point_cloud_subscriber =
+      n.subscribe("/Cobot/Kinect/FilteredPointCloud", 1, FilteredPointCloudCallback);
   // // PART 3: Subscribed to FilteredPointCloud. doing stuff with lasers.
-  // ros::Subscriber laserscan_cloud_subscriber =
-  //     n.subscribe("/Cobot/Kinect/FilteredPointCloud", 1, LaserScanCallback);
-  // SWITCHED FOR PART 5 ****************
-  // PART 2: Subscribed to FilteredPointCloud
-  // ros::Subscriber filtered_point_cloud_subscriber =
-  //     n.subscribe("/COMPSCI403/BAG_POINT_CLOUD", 1, FilteredPointCloudCallback);
-  // PART 3: Subscribed to FilteredPointCloud. doing stuff with lasers.
-  // ros::Subscriber laserscan_cloud_subscriber =
-  //     n.subscribe("/COMPSCI403/BAG_POINT_CLOUD", 1, LaserScanCallback);
+  ros::Subscriber laserscan_cloud_subscriber =
+      n.subscribe("/Cobot/Kinect/FilteredPointCloud", 1, LaserScanCallback);
 
   ros::spin();
 
